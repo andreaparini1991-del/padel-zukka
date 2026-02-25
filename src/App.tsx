@@ -319,36 +319,38 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans pb-20">
       <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-30">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button 
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="p-2 hover:bg-[#F5F5F0] rounded-xl transition-colors"
-            >
-              <Menu size={24} />
-            </button>
-            <div>
-              <h1 className="text-xl font-serif italic font-bold tracking-tight leading-none">Padel Americano</h1>
-              <p className="text-[10px] uppercase tracking-widest opacity-50 font-semibold">12 Players • 11 Rounds</p>
+        <div className="max-w-4xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center justify-between w-full sm:w-auto gap-3">
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                className="p-2 hover:bg-[#F5F5F0] rounded-xl transition-colors"
+              >
+                <Menu size={24} />
+              </button>
+              <div>
+                <h1 className="text-xl font-serif italic font-bold tracking-tight leading-none">Padel Americano</h1>
+                <p className="text-[10px] uppercase tracking-widest opacity-50 font-semibold">12 Players • 11 Rounds</p>
+              </div>
             </div>
           </div>
           
-          <div className="flex bg-[#E4E3E0] p-1 rounded-full overflow-x-auto">
+          <div className="grid grid-cols-3 sm:flex w-full sm:w-auto bg-[#E4E3E0] p-1 rounded-xl sm:rounded-full gap-1">
             <button 
               onClick={() => setActiveTab('live')}
-              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeTab === 'live' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+              className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'live' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Live
             </button>
             <button 
               onClick={() => setActiveTab('leaderboard')}
-              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeTab === 'leaderboard' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+              className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'leaderboard' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Classifica
             </button>
             <button 
               onClick={() => setActiveTab('players')}
-              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeTab === 'players' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+              className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'players' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Giocatori
             </button>
