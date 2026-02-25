@@ -1,5 +1,5 @@
 {
-  "name": "Padel Americano Manager",
+  "name": "Torneo Padel",
   "description": "Gestore di tornei di Padel Americano a 12 partecipanti con sistema di sostituti e classifica in tempo reale.",
   "requestFramePermissions": []
 }
