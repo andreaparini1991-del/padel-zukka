@@ -1,6 +1,8 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2 } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2, QrCode } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import LZString from 'lz-string';
+import { QRCodeCanvas } from 'qrcode.react';
 import { Player, Round, PlayerRole, LeaderboardEntry, Match } from './types';
 import { INITIAL_ROUNDS, INITIAL_PLAYERS } from './constants';
 
@@ -25,6 +27,74 @@ export default function App() {
     const saved = localStorage.getItem(STORAGE_KEY_UNLOCKED);
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [incomingTournament, setIncomingTournament] = useState<{ rounds: Round[], starters: Player[], unlockedMatches?: string[] } | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [shareUrl, setShareUrl] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper to get stats for comparison
+  const getStats = (tournamentRounds: Round[]) => {
+    const completed = tournamentRounds.filter(r => r.completed);
+    const lastRound = completed.length > 0 ? Math.max(...completed.map(r => r.number)) : 0;
+    const matchesPlayed = completed.reduce((acc, r) => acc + r.matches.length, 0);
+    return { lastRound, matchesPlayed };
+  };
+
+  // URL Import
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tournamentData = params.get('torneo');
+    if (tournamentData) {
+      try {
+        const decompressed = LZString.decompressFromEncodedURIComponent(tournamentData);
+        if (decompressed) {
+          const data = JSON.parse(decompressed);
+          if (data.rounds && data.starters) {
+            // Check if data is different from current state
+            const currentStats = getStats(rounds);
+            const incomingStats = getStats(data.rounds);
+            
+            // Even if stats are same, names or scores might differ. 
+            // For simplicity and safety, we show the modal if the data string is different
+            const currentDataStr = JSON.stringify({ rounds, starters });
+            const incomingDataStr = JSON.stringify({ rounds: data.rounds, starters: data.starters });
+
+            if (currentDataStr !== incomingDataStr) {
+              setIncomingTournament(data);
+              setShowImportModal(true);
+            } else {
+              // Data is identical, just clean URL
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to parse tournament data from URL', e);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, []);
+
+  const handleConfirmImport = () => {
+    if (incomingTournament) {
+      setRounds(incomingTournament.rounds);
+      setStarters(incomingTournament.starters);
+      if (incomingTournament.unlockedMatches) {
+        setUnlockedMatches(new Set(incomingTournament.unlockedMatches));
+      }
+    }
+    setShowImportModal(false);
+    setIncomingTournament(null);
+    window.history.replaceState({}, document.title, window.location.pathname);
+  };
+
+  const handleCancelImport = () => {
+    setShowImportModal(false);
+    setIncomingTournament(null);
+    window.history.replaceState({}, document.title, window.location.pathname);
+  };
 
   // Persistence
   useEffect(() => {
@@ -171,36 +241,336 @@ export default function App() {
     setRounds(newRounds);
   };
 
+  const exportTournament = () => {
+    const fileName = prompt('Inserisci il nome del file:', 'torneo_padel.json');
+    if (!fileName) return;
+
+    const data = {
+      rounds,
+      starters,
+      unlockedMatches: Array.from(unlockedMatches)
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setIsMenuOpen(false);
+  };
+
+  const importTournament = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.rounds && data.starters) {
+          if (confirm('Sei sicuro di voler caricare questo torneo? Sovrascriverà i dati attuali.')) {
+            setRounds(data.rounds);
+            setStarters(data.starters);
+            if (data.unlockedMatches) {
+              setUnlockedMatches(new Set(data.unlockedMatches));
+            }
+            setIsMenuOpen(false);
+          }
+        } else {
+          alert('File non valido.');
+        }
+      } catch (err) {
+        alert('Errore nel caricamento del file.');
+      }
+    };
+    reader.readAsText(file);
+    // Reset input
+    e.target.value = '';
+  };
+
+  const generateShareLink = () => {
+    const data = {
+      rounds,
+      starters,
+      unlockedMatches: Array.from(unlockedMatches)
+    };
+    const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(data));
+    const url = `${window.location.origin}${window.location.pathname}?torneo=${compressed}`;
+    return url;
+  };
+
+  const shareTournament = async () => {
+    const url = generateShareLink();
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Torneo Padel',
+          text: 'Ecco lo stato attuale del torneo di Padel!',
+          url: url
+        });
+      } else {
+        await navigator.clipboard.writeText(url);
+        alert('Link copiato negli appunti!');
+      }
+    } catch (err) {
+      console.error('Error sharing', err);
+    }
+    setIsMenuOpen(false);
+  };
+
+  const openQrCode = () => {
+    setShareUrl(generateShareLink());
+    setShowQrModal(true);
+    setIsMenuOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans pb-20">
-      <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-6 flex flex-col md:flex-row justify-between items-center gap-4">
-          <div>
-            <h1 className="text-2xl font-serif italic font-bold tracking-tight">Padel Americano</h1>
-            <p className="text-xs uppercase tracking-widest opacity-50 font-semibold">12 Players • 11 Rounds</p>
+      <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-30">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setIsMenuOpen(!isMenuOpen)}
+              className="p-2 hover:bg-[#F5F5F0] rounded-xl transition-colors"
+            >
+              <Menu size={24} />
+            </button>
+            <div>
+              <h1 className="text-xl font-serif italic font-bold tracking-tight leading-none">Padel Americano</h1>
+              <p className="text-[10px] uppercase tracking-widest opacity-50 font-semibold">12 Players • 11 Rounds</p>
+            </div>
           </div>
+          
           <div className="flex bg-[#E4E3E0] p-1 rounded-full overflow-x-auto">
             <button 
               onClick={() => setActiveTab('live')}
-              className={`px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'live' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeTab === 'live' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Live
             </button>
             <button 
               onClick={() => setActiveTab('leaderboard')}
-              className={`px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'leaderboard' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeTab === 'leaderboard' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Classifica
             </button>
             <button 
               onClick={() => setActiveTab('players')}
-              className={`px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'players' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+              className={`px-4 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap ${activeTab === 'players' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Giocatori
             </button>
           </div>
         </div>
       </header>
+
+      {/* Hamburger Menu Overlay */}
+      <AnimatePresence>
+        {isMenuOpen && (
+          <>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMenuOpen(false)}
+              className="fixed inset-0 bg-[#141414]/40 backdrop-blur-sm z-40"
+            />
+            <motion.div 
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="fixed top-0 left-0 h-full w-80 bg-white z-50 shadow-2xl flex flex-col"
+            >
+              <div className="p-6 border-b border-[#141414]/10 flex justify-between items-center">
+                <h2 className="text-xl font-serif italic">Configurazione</h2>
+                <button onClick={() => setIsMenuOpen(false)} className="p-2 hover:bg-[#F5F5F0] rounded-full">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                <button 
+                  onClick={exportTournament}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <Download size={24} className="text-blue-600" />
+                  </div>
+                  <div>
+                    <span className="block font-bold">Salva Torneo</span>
+                    <span className="text-xs opacity-50">Esporta in formato JSON</span>
+                  </div>
+                </button>
+
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <Upload size={24} className="text-green-600" />
+                  </div>
+                  <div>
+                    <span className="block font-bold">Carica Torneo</span>
+                    <span className="text-xs opacity-50">Importa da file JSON</span>
+                  </div>
+                </button>
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  onChange={importTournament} 
+                  accept=".json" 
+                  className="hidden" 
+                />
+
+                <button 
+                  onClick={shareTournament}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <Share2 size={24} className="text-purple-600" />
+                  </div>
+                  <div>
+                    <span className="block font-bold">Condividi Link</span>
+                    <span className="text-xs opacity-50">Copia link compresso</span>
+                  </div>
+                </button>
+
+                <button 
+                  onClick={openQrCode}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <QrCode size={24} className="text-orange-600" />
+                  </div>
+                  <div>
+                    <span className="block font-bold">Genera QR Code</span>
+                    <span className="text-xs opacity-50">Scansiona per importare</span>
+                  </div>
+                </button>
+
+                <div className="pt-6 mt-6 border-t border-[#141414]/10">
+                  <button 
+                    onClick={resetTournament}
+                    className="w-full flex items-center gap-4 p-4 bg-red-50 hover:bg-red-100 rounded-2xl transition-colors text-left text-red-600"
+                  >
+                    <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                      <Trash2 size={24} />
+                    </div>
+                    <div>
+                      <span className="block font-bold">Reset Totale</span>
+                      <span className="text-xs opacity-50 text-red-400">Cancella ogni dato</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 bg-[#F5F5F0] text-center">
+                <p className="text-[10px] uppercase tracking-widest font-bold opacity-30">Padel Tournament Manager v2.0</p>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* QR Code Modal */}
+      <AnimatePresence>
+        {showQrModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center"
+            >
+              <h3 className="text-xl font-serif italic mb-2">Scansiona per Importare</h3>
+              <p className="text-sm opacity-50 mb-6">Inquadra il QR code con un altro dispositivo per caricare istantaneamente questo torneo.</p>
+              
+              <div className="bg-white p-4 rounded-2xl shadow-inner border border-[#141414]/5 inline-block mb-6">
+                <QRCodeCanvas value={shareUrl} size={200} level="M" />
+              </div>
+
+              <button 
+                onClick={() => setShowQrModal(false)}
+                className="w-full bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors"
+              >
+                Chiudi
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Import Comparison Modal */}
+      <AnimatePresence>
+        {showImportModal && incomingTournament && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
+                  <Share2 size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-serif italic">Importa Torneo</h3>
+                  <p className="text-xs opacity-50">Confronta i dati prima di sovrascrivere</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mb-8">
+                <div className="bg-[#F5F5F0] p-4 rounded-2xl border border-[#141414]/5">
+                  <span className="text-[10px] uppercase font-bold opacity-40 block mb-3">Stato Locale</span>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-end">
+                      <span className="text-xs opacity-60">Match:</span>
+                      <span className="font-mono font-bold text-lg leading-none">{getStats(rounds).matchesPlayed}</span>
+                    </div>
+                    <div className="flex justify-between items-end">
+                      <span className="text-xs opacity-60">Ultimo Turno:</span>
+                      <span className="font-mono font-bold text-lg leading-none">{getStats(rounds).lastRound}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+                  <span className="text-[10px] uppercase font-bold text-blue-400 block mb-3">Stato in Arrivo</span>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-end">
+                      <span className="text-xs text-blue-600/60">Match:</span>
+                      <span className="font-mono font-bold text-lg leading-none text-blue-600">{getStats(incomingTournament.rounds).matchesPlayed}</span>
+                    </div>
+                    <div className="flex justify-between items-end">
+                      <span className="text-xs text-blue-600/60">Ultimo Turno:</span>
+                      <span className="font-mono font-bold text-lg leading-none text-blue-600">{getStats(incomingTournament.rounds).lastRound}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <button 
+                  onClick={handleConfirmImport}
+                  className="w-full bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors flex items-center justify-center gap-2"
+                >
+                  <Check size={20} />
+                  Conferma e Sovrascrivi
+                </button>
+                <button 
+                  onClick={handleCancelImport}
+                  className="w-full bg-[#F5F5F0] text-[#141414] rounded-2xl py-4 font-bold hover:bg-[#E4E3E0] transition-colors"
+                >
+                  Annulla
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
         {activeTab === 'live' && (
