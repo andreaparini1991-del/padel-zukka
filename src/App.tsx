@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2, QrCode } from 'lucide-react';
+import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import LZString from 'lz-string';
-import { QRCodeCanvas } from 'qrcode.react';
 import { Player, Round, PlayerRole, LeaderboardEntry, Match } from './types';
 import { INITIAL_ROUNDS, INITIAL_PLAYERS } from './constants';
 
@@ -28,10 +27,8 @@ export default function App() {
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [showQrModal, setShowQrModal] = useState(false);
   const [incomingTournament, setIncomingTournament] = useState<{ rounds: Round[], starters: Player[], unlockedMatches?: string[] } | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [shareUrl, setShareUrl] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to get stats for comparison
@@ -319,12 +316,6 @@ export default function App() {
     setIsMenuOpen(false);
   };
 
-  const openQrCode = () => {
-    setShareUrl(generateShareLink());
-    setShowQrModal(true);
-    setIsMenuOpen(false);
-  };
-
   return (
     <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans pb-20">
       <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-30">
@@ -437,19 +428,6 @@ export default function App() {
                   </div>
                 </button>
 
-                <button 
-                  onClick={openQrCode}
-                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
-                >
-                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
-                    <QrCode size={24} className="text-orange-600" />
-                  </div>
-                  <div>
-                    <span className="block font-bold">Genera QR Code</span>
-                    <span className="text-xs opacity-50">Scansiona per importare</span>
-                  </div>
-                </button>
-
                 <div className="pt-6 mt-6 border-t border-[#141414]/10">
                   <button 
                     onClick={resetTournament}
@@ -471,34 +449,6 @@ export default function App() {
               </div>
             </motion.div>
           </>
-        )}
-      </AnimatePresence>
-
-      {/* QR Code Modal */}
-      <AnimatePresence>
-        {showQrModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center"
-            >
-              <h3 className="text-xl font-serif italic mb-2">Scansiona per Importare</h3>
-              <p className="text-sm opacity-50 mb-6">Inquadra il QR code con un altro dispositivo per caricare istantaneamente questo torneo.</p>
-              
-              <div className="bg-white p-4 rounded-2xl shadow-inner border border-[#141414]/5 inline-block mb-6">
-                <QRCodeCanvas value={shareUrl} size={200} level="M" />
-              </div>
-
-              <button 
-                onClick={() => setShowQrModal(false)}
-                className="w-full bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors"
-              >
-                Chiudi
-              </button>
-            </motion.div>
-          </div>
         )}
       </AnimatePresence>
 
