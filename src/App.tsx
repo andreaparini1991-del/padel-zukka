@@ -39,6 +39,81 @@ export default function App() {
     return { lastRound, matchesPlayed };
   };
 
+  // Minification logic for sharing
+  const minifyTournament = (data: { rounds: Round[], starters: Player[], unlockedMatches: string[] }) => {
+    return {
+      r: data.rounds.map(round => ({
+        n: round.number,
+        c: round.completed ? 1 : 0,
+        m: round.matches.map(match => ({
+          i: match.id,
+          ct: match.court,
+          tA: match.teamA,
+          tB: match.teamB,
+          sA: match.scoreA,
+          sB: match.scoreB,
+          ap: Object.entries(match.actualPlayers).reduce((acc, [id, name]) => {
+            const starter = data.starters.find(p => p.id === Number(id));
+            if (starter && starter.name !== name) {
+              acc[id] = name;
+            }
+            return acc;
+          }, {} as any)
+        }))
+      })),
+      s: data.starters.map(p => ({
+        i: p.id,
+        n: p.name,
+        r: p.role === PlayerRole.TITOLARE ? 1 : 0
+      })),
+      u: data.unlockedMatches
+    };
+  };
+
+  const unminifyTournament = (min: any) => {
+    // Backward compatibility: check if it's already unminified
+    if (min.rounds && min.starters) return min;
+
+    const starters: Player[] = min.s.map((p: any) => ({
+      id: p.i,
+      name: p.n,
+      role: p.r === 1 ? PlayerRole.TITOLARE : PlayerRole.SOSTITUTO
+    }));
+
+    const rounds: Round[] = min.r.map((r: any) => ({
+      number: r.n,
+      completed: r.c === 1,
+      matches: r.m.map((m: any) => {
+        const actualPlayers: { [id: number]: string } = {};
+        // Fill with starter names first
+        [...m.tA, ...m.tB].forEach(id => {
+          const starter = starters.find(p => p.id === id);
+          actualPlayers[id] = starter?.name || '';
+        });
+        // Override with substitutes
+        Object.entries(m.ap || {}).forEach(([id, name]) => {
+          actualPlayers[Number(id)] = name as string;
+        });
+
+        return {
+          id: m.i,
+          court: m.ct,
+          teamA: m.tA,
+          teamB: m.tB,
+          scoreA: m.sA,
+          scoreB: m.sB,
+          actualPlayers
+        };
+      })
+    }));
+
+    return {
+      rounds,
+      starters,
+      unlockedMatches: min.u || []
+    };
+  };
+
   // URL Import
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -47,7 +122,9 @@ export default function App() {
       try {
         const decompressed = LZString.decompressFromEncodedURIComponent(tournamentData);
         if (decompressed) {
-          const data = JSON.parse(decompressed);
+          const rawData = JSON.parse(decompressed);
+          const data = unminifyTournament(rawData);
+          
           if (data.rounds && data.starters) {
             // Check if data is different from current state
             const currentStats = getStats(rounds);
@@ -65,10 +142,15 @@ export default function App() {
               // Data is identical, just clean URL
               window.history.replaceState({}, document.title, window.location.pathname);
             }
+          } else {
+            throw new Error('Formato dati non valido');
           }
+        } else {
+          throw new Error('Decompressione fallita');
         }
       } catch (e) {
-        console.error('Failed to parse tournament data from URL', e);
+        console.error('Errore critico nel caricamento dei dati dall\'URL:', e);
+        alert('Errore nel caricamento dei dati condivisi. Riprova a copiare il link.');
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     }
@@ -76,10 +158,20 @@ export default function App() {
 
   const handleConfirmImport = () => {
     if (incomingTournament) {
-      setRounds(incomingTournament.rounds);
-      setStarters(incomingTournament.starters);
-      if (incomingTournament.unlockedMatches) {
-        setUnlockedMatches(new Set(incomingTournament.unlockedMatches));
+      const { rounds: newRounds, starters: newStarters, unlockedMatches: newUnlocked } = incomingTournament;
+      
+      // Update state
+      setRounds(newRounds);
+      setStarters(newStarters);
+      if (newUnlocked) {
+        setUnlockedMatches(new Set(newUnlocked));
+      }
+
+      // Force immediate localStorage update
+      localStorage.setItem(STORAGE_KEY_ROUNDS, JSON.stringify(newRounds));
+      localStorage.setItem(STORAGE_KEY_STARTERS, JSON.stringify(newStarters));
+      if (newUnlocked) {
+        localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(newUnlocked));
       }
     }
     setShowImportModal(false);
@@ -290,9 +382,10 @@ export default function App() {
     const data = {
       rounds,
       starters,
-      unlockedMatches: Array.from(unlockedMatches)
+      unlockedMatches: Array.from(unlockedMatches) as string[]
     };
-    const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(data));
+    const minified = minifyTournament(data);
+    const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(minified));
     const url = `${window.location.origin}${window.location.pathname}?torneo=${compressed}`;
     return url;
   };
