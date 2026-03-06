@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2 } from 'lucide-react';
+import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2, Clipboard } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import LZString from 'lz-string';
 import { Player, Round, PlayerRole, LeaderboardEntry, Match } from './types';
@@ -27,6 +27,7 @@ export default function App() {
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
   const [incomingTournament, setIncomingTournament] = useState<{ rounds: Round[], starters: Player[], unlockedMatches?: string[] } | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -390,6 +391,17 @@ export default function App() {
     return url;
   };
 
+  const copyLeaderboard = () => {
+    const textToCopy = leaderboard.map(entry => `${entry.name}\t${entry.matchesPlayed}\t${entry.totalPoints}`).join('\n');
+
+    navigator.clipboard.writeText(textToCopy).then(() => {
+      setIsCopying(true);
+      setTimeout(() => setIsCopying(false), 2000);
+    }).catch(err => {
+      console.error('Failed to copy leaderboard', err);
+    });
+  };
+
   const shareTournament = async () => {
     const url = generateShareLink();
     try {
@@ -520,6 +532,19 @@ export default function App() {
                   <div>
                     <span className="block font-bold">Condividi Link</span>
                     <span className="text-xs opacity-50">Copia link compresso</span>
+                  </div>
+                </button>
+
+                <button 
+                  onClick={copyLeaderboard}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    {isCopying ? <Check size={24} className="text-green-600" /> : <Clipboard size={24} className="text-orange-600" />}
+                  </div>
+                  <div>
+                    <span className="block font-bold">{isCopying ? 'Copiato!' : 'Copia Classifica'}</span>
+                    <span className="text-xs opacity-50">Per Excel / Google Sheets</span>
                   </div>
                 </button>
 
