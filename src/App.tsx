@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2, Clipboard } from 'lucide-react';
+import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus, Save, Plus, Minus, Edit2, Lock, Unlock, Check, Trash2, Menu, X, Download, Upload, Share2, Clipboard, CloudUpload, CloudDownload } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import LZString from 'lz-string';
 import { Player, Round, PlayerRole, LeaderboardEntry, Match } from './types';
@@ -8,6 +8,12 @@ import { INITIAL_ROUNDS, INITIAL_PLAYERS } from './constants';
 const STORAGE_KEY_ROUNDS = 'padel_tournament_rounds';
 const STORAGE_KEY_STARTERS = 'padel_tournament_starters';
 const STORAGE_KEY_UNLOCKED = 'padel_tournament_unlocked';
+
+const GOOGLE_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSfTkxLau-pYc3bCS0LgCiW_M1aogrw4Ypv6czOPRcbthZMuTA/formResponse';
+const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQG2pYTsjkUEtTb4dyGaBHRQ-5mSSXo3glLQfqbejebXVpmT3oDubXovDExoLMMKk9gDlyArTUK2DO-/pub?gid=327084063&single=true&output=csv';
+const ENTRY_ID_TORNEO = 'entry.1572193378';
+const ENTRY_DATI_TORNEO = 'entry.112050746';
+const SERVER_PASSWORD = 'zucca';
 
 export default function App() {
   const [rounds, setRounds] = useState<Round[]>(() => {
@@ -19,6 +25,15 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_PLAYERS;
   });
   const [activeTab, setActiveTab] = useState<'live' | 'leaderboard' | 'players'>('live');
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   const [expandedRound, setExpandedRound] = useState<number | null>(1);
   const [swappingPlayer, setSwappingPlayer] = useState<{ roundIdx: number, matchIdx: number, originalId: number } | null>(null);
   const [newPlayerName, setNewPlayerName] = useState('');
@@ -30,6 +45,18 @@ export default function App() {
   const [isCopying, setIsCopying] = useState(false);
   const [incomingTournament, setIncomingTournament] = useState<{ rounds: Round[], starters: Player[], unlockedMatches?: string[] } | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFileName, setExportFileName] = useState('torneo_padel.json');
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [serverModal, setServerModal] = useState<{
+    type: 'save' | 'load';
+    step: 'password' | 'id' | 'confirm' | 'list';
+    tournamentId?: string;
+    foundData?: any;
+  } | null>(null);
+  const [serverPassword, setServerPassword] = useState('');
+  const [serverTournamentId, setServerTournamentId] = useState('');
+  const [isServerLoading, setIsServerLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to get stats for comparison
@@ -200,16 +227,17 @@ export default function App() {
   }, [unlockedMatches]);
 
   const resetTournament = () => {
-    if (confirm('Sei sicuro di voler resettare tutto il torneo? Tutti i punteggi e i nomi verranno persi.')) {
-      localStorage.removeItem(STORAGE_KEY_ROUNDS);
-      localStorage.removeItem(STORAGE_KEY_STARTERS);
-      localStorage.removeItem(STORAGE_KEY_UNLOCKED);
-      setRounds(INITIAL_ROUNDS);
-      setStarters(INITIAL_PLAYERS);
-      setUnlockedMatches(new Set());
-      setExpandedRound(1);
-      setActiveTab('live');
-    }
+    localStorage.removeItem(STORAGE_KEY_ROUNDS);
+    localStorage.removeItem(STORAGE_KEY_STARTERS);
+    localStorage.removeItem(STORAGE_KEY_UNLOCKED);
+    setRounds(INITIAL_ROUNDS);
+    setStarters(INITIAL_PLAYERS);
+    setUnlockedMatches(new Set());
+    setExpandedRound(1);
+    setActiveTab('live');
+    setShowResetModal(false);
+    setIsMenuOpen(false);
+    setToast({ message: 'Torneo resettato con successo!', type: 'success' });
   };
 
   // Calculate Leaderboard
@@ -332,9 +360,10 @@ export default function App() {
   };
 
   const exportTournament = () => {
-    const fileName = prompt('Inserisci il nome del file:', 'torneo_padel.json');
-    if (!fileName) return;
+    setShowExportModal(true);
+  };
 
+  const handleConfirmExport = () => {
     const data = {
       rounds,
       starters,
@@ -344,10 +373,14 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
+    a.download = exportFileName.endsWith('.json') ? exportFileName : `${exportFileName}.json`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    setShowExportModal(false);
     setIsMenuOpen(false);
+    setToast({ message: 'Torneo esportato con successo!', type: 'success' });
   };
 
   const importTournament = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -359,19 +392,13 @@ export default function App() {
       try {
         const data = JSON.parse(event.target?.result as string);
         if (data.rounds && data.starters) {
-          if (confirm('Sei sicuro di voler caricare questo torneo? Sovrascriverà i dati attuali.')) {
-            setRounds(data.rounds);
-            setStarters(data.starters);
-            if (data.unlockedMatches) {
-              setUnlockedMatches(new Set(data.unlockedMatches));
-            }
-            setIsMenuOpen(false);
-          }
+          setIncomingTournament(data);
+          setShowImportModal(true);
         } else {
-          alert('File non valido.');
+          setToast({ message: 'File non valido.', type: 'error' });
         }
       } catch (err) {
-        alert('Errore nel caricamento del file.');
+        setToast({ message: 'Errore nel caricamento del file.', type: 'error' });
       }
     };
     reader.readAsText(file);
@@ -379,7 +406,92 @@ export default function App() {
     e.target.value = '';
   };
 
-  const generateShareLink = () => {
+  const parseCSVLine = (line: string) => {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') inQuotes = !inQuotes;
+      else if (char === ',' && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else current += char;
+    }
+    result.push(current.trim());
+    return result.map(col => col.replace(/^"|"$/g, ''));
+  };
+
+  const fetchTournamentList = async () => {
+    setIsServerLoading(true);
+    setServerModal({ type: 'load', step: 'list' });
+    setIsMenuOpen(false);
+
+    try {
+      const response = await fetch(CSV_URL);
+      const csvText = await response.text();
+      const lines = csvText.split('\n');
+      const tournamentsMap: Record<string, { id: string, timestamp: string, data: string }> = {};
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const columns = parseCSVLine(line);
+        if (columns.length >= 3) {
+          const timestamp = columns[0].trim();
+          const id = columns[1].trim();
+          const data = columns[2].trim();
+          tournamentsMap[id] = { id, timestamp, data };
+        }
+      }
+      
+      const list = Object.values(tournamentsMap).sort((a, b) => 
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+      );
+      
+      setServerModal({ type: 'load', step: 'list', foundData: list });
+    } catch (err) {
+      console.error('Errore nel recupero della lista', err);
+      setToast({ message: 'Errore nel recupero della lista.', type: 'error' });
+      setServerModal(null);
+    } finally {
+      setIsServerLoading(false);
+    }
+  };
+
+  const handleLoadTournament = (tournament: { id: string, data: string }) => {
+    try {
+      const decompressed = LZString.decompressFromEncodedURIComponent(tournament.data);
+      if (decompressed) {
+        const rawData = JSON.parse(decompressed);
+        const data = unminifyTournament(rawData);
+        setServerModal({ 
+          type: 'load', 
+          step: 'confirm', 
+          tournamentId: tournament.id, 
+          foundData: data 
+        });
+      } else {
+        setToast({ message: 'Errore nella decompressione dei dati.', type: 'error' });
+      }
+    } catch (err) {
+      console.error('Errore nel caricamento del torneo', err);
+      setToast({ message: 'Errore nel caricamento del torneo.', type: 'error' });
+    }
+  };
+
+  const handleSaveToServer = async () => {
+    if (serverPassword !== SERVER_PASSWORD) {
+      setToast({ message: 'Password errata!', type: 'error' });
+      return;
+    }
+
+    if (!serverTournamentId.trim()) {
+      setToast({ message: 'Inserisci un ID torneo valido.', type: 'error' });
+      return;
+    }
+
+    setIsServerLoading(true);
     const data = {
       rounds,
       starters,
@@ -387,8 +499,92 @@ export default function App() {
     };
     const minified = minifyTournament(data);
     const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(minified));
-    const url = `${window.location.origin}${window.location.pathname}?torneo=${compressed}`;
-    return url;
+
+    const formData = new URLSearchParams();
+    formData.append(ENTRY_ID_TORNEO, serverTournamentId.trim());
+    formData.append(ENTRY_DATI_TORNEO, compressed);
+
+    try {
+      await fetch(GOOGLE_FORM_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData.toString(),
+      });
+      setServerModal(null);
+      setServerPassword('');
+      setServerTournamentId('');
+      setToast({ message: 'Salvataggio inviato con successo!', type: 'success' });
+    } catch (err) {
+      console.error('Errore durante il salvataggio sul server', err);
+      setToast({ message: 'Errore durante il salvataggio.', type: 'error' });
+    } finally {
+      setIsServerLoading(false);
+    }
+  };
+
+  const handleLoadFromServer = async () => {
+    if (!serverTournamentId.trim()) {
+      setToast({ message: 'Inserisci un ID torneo valido.', type: 'error' });
+      return;
+    }
+
+    setIsServerLoading(true);
+    try {
+      const response = await fetch(CSV_URL);
+      const csvText = await response.text();
+      
+      const lines = csvText.split('\n');
+      let foundData = null;
+
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        
+        const columns = parseCSVLine(line);
+        if (columns.length >= 3) {
+          const id = columns[1].trim();
+          if (id === serverTournamentId.trim()) {
+            foundData = columns[2].trim();
+            break;
+          }
+        }
+      }
+
+      if (foundData) {
+        handleLoadTournament({ id: serverTournamentId.trim(), data: foundData });
+      } else {
+        setToast({ message: `Torneo "${serverTournamentId}" non trovato.`, type: 'error' });
+      }
+    } catch (err) {
+      console.error('Errore durante il caricamento dal server', err);
+      setToast({ message: 'Errore di connessione al server.', type: 'error' });
+    } finally {
+      setIsServerLoading(false);
+    }
+  };
+
+  const confirmLoadFromServer = () => {
+    if (serverModal?.foundData) {
+      const data = serverModal.foundData;
+      setRounds(data.rounds);
+      setStarters(data.starters);
+      if (data.unlockedMatches) {
+        setUnlockedMatches(new Set(data.unlockedMatches));
+      }
+      
+      localStorage.setItem(STORAGE_KEY_ROUNDS, JSON.stringify(data.rounds));
+      localStorage.setItem(STORAGE_KEY_STARTERS, JSON.stringify(data.starters));
+      if (data.unlockedMatches) {
+        localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(data.unlockedMatches));
+      }
+
+      setServerModal(null);
+      setServerTournamentId('');
+      setToast({ message: 'Torneo caricato con successo!', type: 'success' });
+    }
   };
 
   const copyLeaderboard = () => {
@@ -402,27 +598,22 @@ export default function App() {
     });
   };
 
-  const shareTournament = async () => {
-    const url = generateShareLink();
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: 'Torneo Padel',
-          text: 'Ecco lo stato attuale del torneo di Padel!',
-          url: url
-        });
-      } else {
-        await navigator.clipboard.writeText(url);
-        alert('Link copiato negli appunti!');
-      }
-    } catch (err) {
-      console.error('Error sharing', err);
-    }
-    setIsMenuOpen(false);
-  };
-
   return (
     <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans pb-20">
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 50, x: '-50%' }}
+            className={`fixed bottom-24 left-1/2 px-6 py-3 rounded-full shadow-lg z-[100] text-white font-medium text-sm whitespace-nowrap ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}
+          >
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-30">
         <div className="max-w-4xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center justify-between w-full sm:w-auto gap-3">
@@ -490,17 +681,32 @@ export default function App() {
               
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 <button 
-                  onClick={exportTournament}
+                  onClick={fetchTournamentList}
                   className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
                 >
                   <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
-                    <Download size={24} className="text-blue-600" />
+                    <CloudDownload size={24} className="text-green-500" />
                   </div>
                   <div>
-                    <span className="block font-bold">Salva Torneo</span>
-                    <span className="text-xs opacity-50">Esporta in formato JSON</span>
+                    <span className="block font-bold">Carica da Server</span>
+                    <span className="text-xs opacity-50">Importa Torneo da Database</span>
                   </div>
                 </button>
+
+                <button 
+                  onClick={() => { setServerModal({ type: 'save', step: 'password' }); setIsMenuOpen(false); }}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <CloudUpload size={24} className="text-blue-500" />
+                  </div>
+                  <div>
+                    <span className="block font-bold">Salva su Server</span>
+                    <span className="text-xs opacity-50">Esporta su Database</span>
+                  </div>
+                </button>
+
+                <div className="h-px bg-[#141414]/5 my-2" />
 
                 <button 
                   onClick={() => fileInputRef.current?.click()}
@@ -510,7 +716,7 @@ export default function App() {
                     <Upload size={24} className="text-green-600" />
                   </div>
                   <div>
-                    <span className="block font-bold">Carica Torneo</span>
+                    <span className="block font-bold">Carica da File</span>
                     <span className="text-xs opacity-50">Importa da file JSON</span>
                   </div>
                 </button>
@@ -523,17 +729,19 @@ export default function App() {
                 />
 
                 <button 
-                  onClick={shareTournament}
+                  onClick={exportTournament}
                   className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
                 >
                   <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
-                    <Share2 size={24} className="text-purple-600" />
+                    <Download size={24} className="text-blue-600" />
                   </div>
                   <div>
-                    <span className="block font-bold">Condividi Link</span>
-                    <span className="text-xs opacity-50">Copia link compresso</span>
+                    <span className="block font-bold">Salva su File</span>
+                    <span className="text-xs opacity-50">Esporta in formato JSON</span>
                   </div>
                 </button>
+
+                <div className="h-px bg-[#141414]/5 my-2" />
 
                 <button 
                   onClick={copyLeaderboard}
@@ -550,7 +758,7 @@ export default function App() {
 
                 <div className="pt-6 mt-6 border-t border-[#141414]/10">
                   <button 
-                    onClick={resetTournament}
+                    onClick={() => setShowResetModal(true)}
                     className="w-full flex items-center gap-4 p-4 bg-red-50 hover:bg-red-100 rounded-2xl transition-colors text-left text-red-600"
                   >
                     <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
@@ -558,7 +766,7 @@ export default function App() {
                     </div>
                     <div>
                       <span className="block font-bold">Reset Totale</span>
-                      <span className="text-xs opacity-50 text-red-400">Cancella ogni dato</span>
+                      <span className="text-xs opacity-50 text-red-400">Resetta il Torneo Locale</span>
                     </div>
                   </button>
                 </div>
@@ -569,6 +777,266 @@ export default function App() {
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* Export Filename Modal */}
+      <AnimatePresence>
+        {showExportModal && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
+                  <Download size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-serif italic">Esporta Torneo</h3>
+                  <p className="text-xs opacity-50">Scegli il nome del file</p>
+                </div>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase font-bold opacity-40">Nome File</label>
+                  <input 
+                    autoFocus
+                    type="text" 
+                    placeholder="torneo_padel.json"
+                    value={exportFileName}
+                    onChange={(e) => setExportFileName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleConfirmExport()}
+                    className="w-full bg-[#F5F5F0] border-none rounded-2xl p-4 text-sm font-bold focus:ring-2 focus:ring-blue-500 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <button 
+                  onClick={handleConfirmExport}
+                  className="w-full bg-blue-600 text-white rounded-2xl py-4 font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Download size={20} />
+                  Scarica File
+                </button>
+                <button 
+                  onClick={() => setShowExportModal(false)}
+                  className="w-full bg-[#F5F5F0] text-[#141414] rounded-2xl py-4 font-bold hover:bg-[#E4E3E0] transition-colors"
+                >
+                  Annulla
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Reset Confirmation Modal */}
+      <AnimatePresence>
+        {showResetModal && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-red-50 rounded-2xl flex items-center justify-center text-red-600">
+                  <Trash2 size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-serif italic">Reset Totale</h3>
+                  <p className="text-xs opacity-50">Questa azione è irreversibile</p>
+                </div>
+              </div>
+
+              <p className="text-sm opacity-70 mb-8 leading-relaxed">
+                Sei sicuro di voler resettare tutto il torneo? Tutti i punteggi, i nomi e le impostazioni verranno persi per sempre.
+              </p>
+
+              <div className="space-y-3">
+                <button 
+                  onClick={resetTournament}
+                  className="w-full bg-red-600 text-white rounded-2xl py-4 font-bold hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={20} />
+                  Sì, Resetta Tutto
+                </button>
+                <button 
+                  onClick={() => setShowResetModal(false)}
+                  className="w-full bg-[#F5F5F0] text-[#141414] rounded-2xl py-4 font-bold hover:bg-[#E4E3E0] transition-colors"
+                >
+                  Annulla
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Server Modal */}
+      <AnimatePresence>
+        {serverModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${serverModal.type === 'save' ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+                    {serverModal.type === 'save' ? <CloudUpload size={24} /> : <CloudDownload size={24} />}
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-serif italic">
+                      {serverModal.type === 'save' ? 'Salva su Server' : 'Carica da Server'}
+                    </h3>
+                    <p className="text-xs opacity-50">
+                      {serverModal.step === 'password' ? 'Inserisci la password' : 
+                       serverModal.step === 'id' ? 'Inserisci l\'ID del torneo' : 
+                       serverModal.step === 'list' ? 'Scegli un torneo dalla lista' :
+                       'Conferma caricamento'}
+                    </p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setServerModal(null)}
+                  className="p-2 hover:bg-[#F5F5F0] rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {serverModal.step === 'password' && (
+                  <div>
+                    <input 
+                      type="password"
+                      placeholder="Password"
+                      value={serverPassword}
+                      onChange={(e) => setServerPassword(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && setServerModal({ ...serverModal, step: 'id' })}
+                      className="w-full px-4 py-3 bg-[#F5F5F0] rounded-xl border border-[#141414]/5 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      autoFocus
+                    />
+                    <button 
+                      onClick={() => setServerModal({ ...serverModal, step: 'id' })}
+                      className="w-full mt-4 bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors"
+                    >
+                      Avanti
+                    </button>
+                  </div>
+                )}
+
+                {serverModal.step === 'list' && (
+                  <div className="space-y-4">
+                    {isServerLoading ? (
+                      <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                        <RefreshCw size={32} className="animate-spin text-green-600" />
+                        <p className="text-sm opacity-50">Recupero tornei salvati...</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="max-h-[300px] overflow-y-auto pr-2 space-y-2 scrollbar-thin scrollbar-thumb-gray-200">
+                          {serverModal.foundData && serverModal.foundData.length > 0 ? (
+                            serverModal.foundData.map((t: any) => (
+                              <button
+                                key={t.id}
+                                onClick={() => handleLoadTournament(t)}
+                                className="w-full flex items-center justify-between p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-all text-left group"
+                              >
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-sm">{t.id}</span>
+                                </div>
+                                <ChevronRight size={16} className="opacity-20 group-hover:opacity-100 transition-opacity" />
+                              </button>
+                            ))
+                          ) : (
+                            <div className="text-center py-8 opacity-50">
+                              Nessun torneo trovato sul server.
+                            </div>
+                          )}
+                        </div>
+                        <div className="pt-2 border-t border-[#141414]/5">
+                          <button 
+                            onClick={() => setServerModal({ ...serverModal, step: 'id' })}
+                            className="w-full text-xs font-bold opacity-40 hover:opacity-100 transition-opacity py-2"
+                          >
+                            Cerca per ID manuale
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {serverModal.step === 'id' && (
+                  <div>
+                    <input 
+                      type="text"
+                      placeholder="Nome Torneo (ID)"
+                      value={serverTournamentId}
+                      onChange={(e) => setServerTournamentId(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && (serverModal.type === 'save' ? handleSaveToServer() : handleLoadFromServer())}
+                      className="w-full px-4 py-3 bg-[#F5F5F0] rounded-xl border border-[#141414]/5 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                      autoFocus
+                    />
+                    <button 
+                      onClick={serverModal.type === 'save' ? handleSaveToServer : handleLoadFromServer}
+                      disabled={isServerLoading}
+                      className="w-full mt-4 bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isServerLoading ? (
+                        <RefreshCw size={20} className="animate-spin" />
+                      ) : (
+                        serverModal.type === 'save' ? 'Salva Ora' : 'Cerca Torneo'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {serverModal.step === 'confirm' && (
+                  <div className="space-y-6">
+                    <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
+                      <span className="text-[10px] uppercase font-bold text-green-600 block mb-3">Torneo Trovato</span>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-end">
+                          <span className="text-xs text-green-600/60">Match:</span>
+                          <span className="font-mono font-bold text-lg leading-none text-green-600">{getStats(serverModal.foundData.rounds).matchesPlayed}</span>
+                        </div>
+                        <div className="flex justify-between items-end">
+                          <span className="text-xs text-green-600/60">Ultimo Turno:</span>
+                          <span className="font-mono font-bold text-lg leading-none text-green-600">{getStats(serverModal.foundData.rounds).lastRound}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <button 
+                        onClick={confirmLoadFromServer}
+                        className="w-full bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors flex items-center justify-center gap-2"
+                      >
+                        <Check size={20} />
+                        Conferma e Sovrascrivi
+                      </button>
+                      <button 
+                        onClick={() => setServerModal(null)}
+                        className="w-full bg-[#F5F5F0] text-[#141414] rounded-2xl py-4 font-bold hover:bg-[#E4E3E0] transition-colors"
+                      >
+                        Annulla
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
@@ -894,7 +1362,7 @@ export default function App() {
                   <p className="text-xs opacity-50">Resetta tutti i dati del torneo</p>
                 </div>
                 <button 
-                  onClick={resetTournament}
+                  onClick={() => setShowResetModal(true)}
                   className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl font-bold hover:bg-red-100 transition-colors"
                 >
                   <Trash2 size={18} />
