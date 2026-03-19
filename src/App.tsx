@@ -35,8 +35,6 @@ export default function App() {
   }, [toast]);
 
   const [expandedRound, setExpandedRound] = useState<number | null>(1);
-  const [swappingPlayer, setSwappingPlayer] = useState<{ roundIdx: number, matchIdx: number, originalId: number } | null>(null);
-  const [newPlayerName, setNewPlayerName] = useState('');
   const [unlockedMatches, setUnlockedMatches] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_UNLOCKED);
     return saved ? new Set(JSON.parse(saved)) : new Set();
@@ -57,6 +55,9 @@ export default function App() {
   const [serverPassword, setServerPassword] = useState('');
   const [serverTournamentId, setServerTournamentId] = useState('');
   const [isServerLoading, setIsServerLoading] = useState(false);
+  const [showTotalStandings, setShowTotalStandings] = useState(false);
+  const [totalStandingsData, setTotalStandingsData] = useState<LeaderboardEntry[]>([]);
+  const [isTotalStandingsLoading, setIsTotalStandingsLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helper to get stats for comparison
@@ -65,6 +66,95 @@ export default function App() {
     const lastRound = completed.length > 0 ? Math.max(...completed.map(r => r.number)) : 0;
     const matchesPlayed = completed.reduce((acc, r) => acc + r.matches.length, 0);
     return { lastRound, matchesPlayed };
+  };
+
+  const fetchTotalStandings = async () => {
+    setIsTotalStandingsLoading(true);
+    setShowTotalStandings(true);
+    setIsMenuOpen(false);
+    try {
+      const response = await fetch(CSV_URL);
+      const text = await response.text();
+      const rows = text.split('\n').map(row => row.split(','));
+      
+      const idIdx = rows[0].findIndex(col => col.trim() === 'ID_Torneo');
+      const dataIdx = rows[0].findIndex(col => col.trim() === 'Dati_Torneo');
+
+      if (idIdx === -1 || dataIdx === -1) throw new Error('CSV non valido');
+
+      const scores: { [name: string]: { points: number, matches: number } } = {};
+      let maxMatches = 0;
+
+      // Process each game day (row)
+      rows.slice(1).forEach(row => {
+        if (!row[dataIdx]) return;
+        try {
+          const rawData = row[dataIdx].replace(/^"|"$/g, '').replace(/""/g, '"');
+          const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
+          if (!decompressed) return;
+          const dayData = JSON.parse(decompressed);
+          const unminified = unminifyTournament(dayData);
+          
+          const dayStarters: Player[] = unminified.starters;
+          const dayRounds: Round[] = unminified.rounds;
+
+          dayRounds.filter(r => r.completed).forEach(round => {
+            const playersInThisRound = new Set<string>();
+            
+            round.matches.forEach(match => {
+              const { scoreA, scoreB, teamA, teamB } = match;
+              
+              const processMatchPlayer = (id: number, points: number) => {
+                const player = dayStarters.find(p => p.id === id);
+                if (player) {
+                  if (!scores[player.name]) scores[player.name] = { points: 0, matches: 0 };
+                  scores[player.name].points += points;
+                  scores[player.name].matches += 1;
+                  playersInThisRound.add(player.name);
+                }
+              };
+
+              teamA.forEach(id => processMatchPlayer(id, scoreA));
+              teamB.forEach(id => processMatchPlayer(id, scoreB));
+            });
+
+            // Award 2 points to starters who did NOT play in this round
+            dayStarters.forEach(p => {
+              if (!playersInThisRound.has(p.name)) {
+                if (!scores[p.name]) scores[p.name] = { points: 0, matches: 0 };
+                scores[p.name].points += 2;
+              }
+            });
+          });
+        } catch (e) {
+          console.error('Errore nel processare una giornata:', e);
+        }
+      });
+
+      // Calculate max matches played by any player
+      Object.values(scores).forEach(data => {
+        if (data.matches > maxMatches) maxMatches = data.matches;
+      });
+
+      // Apply bonus points: 2 per missing match compared to maxMatches
+      const finalData = Object.entries(scores).map(([name, data]) => {
+        const missingMatches = maxMatches - data.matches;
+        const bonusPoints = missingMatches * 2;
+        return {
+          name,
+          totalPoints: data.points + bonusPoints,
+          matchesPlayed: data.matches
+        };
+      }).sort((a, b) => b.totalPoints - a.totalPoints || a.name.localeCompare(b.name));
+
+      setTotalStandingsData(finalData);
+    } catch (error) {
+      console.error('Errore nel caricamento classifica totale:', error);
+      setToast({ message: 'Errore nel caricamento classifica totale', type: 'error' });
+      setShowTotalStandings(false);
+    } finally {
+      setIsTotalStandingsLoading(false);
+    }
   };
 
   // Minification logic for sharing
@@ -79,20 +169,12 @@ export default function App() {
           tA: match.teamA,
           tB: match.teamB,
           sA: match.scoreA,
-          sB: match.scoreB,
-          ap: Object.entries(match.actualPlayers).reduce((acc, [id, name]) => {
-            const starter = data.starters.find(p => p.id === Number(id));
-            if (starter && starter.name !== name) {
-              acc[id] = name;
-            }
-            return acc;
-          }, {} as any)
+          sB: match.scoreB
         }))
       })),
       s: data.starters.map(p => ({
         i: p.id,
-        n: p.name,
-        r: p.role === PlayerRole.TITOLARE ? 1 : 0
+        n: p.name
       })),
       u: data.unlockedMatches
     };
@@ -105,32 +187,20 @@ export default function App() {
     const starters: Player[] = min.s.map((p: any) => ({
       id: p.i,
       name: p.n,
-      role: p.r === 1 ? PlayerRole.TITOLARE : PlayerRole.SOSTITUTO
+      role: PlayerRole.TITOLARE
     }));
 
     const rounds: Round[] = min.r.map((r: any) => ({
       number: r.n,
       completed: r.c === 1,
       matches: r.m.map((m: any) => {
-        const actualPlayers: { [id: number]: string } = {};
-        // Fill with starter names first
-        [...m.tA, ...m.tB].forEach(id => {
-          const starter = starters.find(p => p.id === id);
-          actualPlayers[id] = starter?.name || '';
-        });
-        // Override with substitutes
-        Object.entries(m.ap || {}).forEach(([id, name]) => {
-          actualPlayers[Number(id)] = name as string;
-        });
-
         return {
           id: m.i,
           court: m.ct,
           teamA: m.tA,
           teamB: m.tB,
           scoreA: m.sA,
-          scoreB: m.sB,
-          actualPlayers
+          scoreB: m.sB
         };
       })
     }));
@@ -242,50 +312,36 @@ export default function App() {
 
   // Calculate Leaderboard
   const leaderboard = useMemo(() => {
-    const scores: { [name: string]: { points: number, matches: number, role: PlayerRole, hasPlayed: boolean } } = {};
+    const scores: { [name: string]: { points: number, matches: number } } = {};
 
     // Initialize starters
     starters.forEach(p => {
-      scores[p.name] = { points: 0, matches: 0, role: PlayerRole.TITOLARE, hasPlayed: true };
+      scores[p.name] = { points: 0, matches: 0 };
     });
 
-    // We need to process rounds in order to know when a substitute "enters" the active pool
-    const sortedRounds = [...rounds].sort((a, b) => a.number - b.number);
-    
-    sortedRounds.filter(r => r.completed).forEach(round => {
+    rounds.filter(r => r.completed).forEach(round => {
       const playersInThisRound = new Set<string>();
       
-      // 1. Process matches to see who played and what they scored
       round.matches.forEach(match => {
-        const { scoreA, scoreB, actualPlayers, teamA, teamB } = match;
+        const { scoreA, scoreB, teamA, teamB } = match;
         
-        const processMatchPlayer = (originalId: number, points: number) => {
-          const actualName = actualPlayers[originalId];
-          const originalPlayer = starters.find(p => p.id === originalId);
-          const originalName = originalPlayer?.name || '';
-
-          playersInThisRound.add(actualName);
-
-          if (!scores[actualName]) {
-            // New substitute found
-            scores[actualName] = { points: 0, matches: 0, role: PlayerRole.SOSTITUTO, hasPlayed: true };
+        const processMatchPlayer = (id: number, points: number) => {
+          const player = starters.find(p => p.id === id);
+          if (player) {
+            scores[player.name].points += points;
+            scores[player.name].matches += 1;
+            playersInThisRound.add(player.name);
           }
-          
-          scores[actualName].points += points;
-          scores[actualName].matches += 1;
-          scores[actualName].hasPlayed = true;
         };
 
         teamA.forEach(id => processMatchPlayer(id, scoreA));
         teamB.forEach(id => processMatchPlayer(id, scoreB));
       });
 
-      // 2. Award 2 points to "active" players who did NOT play in this round
-      // Active players are all starters + any substitute who has already played at least once (including this round)
-      Object.keys(scores).forEach(playerName => {
-        if (!playersInThisRound.has(playerName)) {
-          // Player is active but didn't play this round
-          scores[playerName].points += 2;
+      // Award 2 points to starters who did NOT play in this round
+      starters.forEach(p => {
+        if (!playersInThisRound.has(p.name)) {
+          scores[p.name].points += 2;
         }
       });
     });
@@ -293,7 +349,6 @@ export default function App() {
     return Object.entries(scores)
       .map(([name, data]) => ({
         name,
-        role: data.role,
         totalPoints: data.points,
         matchesPlayed: data.matches
       }))
@@ -325,38 +380,8 @@ export default function App() {
   };
 
   const handleStarterNameChange = (id: number, newName: string) => {
-    const oldName = starters.find(p => p.id === id)?.name || '';
     const updatedStarters = starters.map(p => p.id === id ? { ...p, name: newName } : p);
     setStarters(updatedStarters);
-
-    const updatedRounds = rounds.map(round => ({
-      ...round,
-      matches: round.matches.map(match => ({
-        ...match,
-        actualPlayers: {
-          ...match.actualPlayers,
-          [id]: match.actualPlayers[id] === oldName ? newName : match.actualPlayers[id]
-        }
-      }))
-    }));
-    setRounds(updatedRounds);
-  };
-
-  const handleSwapPlayer = () => {
-    if (!swappingPlayer || !newPlayerName.trim()) return;
-    const { roundIdx, matchIdx, originalId } = swappingPlayer;
-    const newRounds = [...rounds];
-    newRounds[roundIdx].matches[matchIdx].actualPlayers[originalId] = newPlayerName.trim();
-    setRounds(newRounds);
-    setSwappingPlayer(null);
-    setNewPlayerName('');
-  };
-
-  const resetPlayer = (roundIdx: number, matchIdx: number, originalId: number) => {
-    const originalName = starters.find(p => p.id === originalId)?.name || '';
-    const newRounds = [...rounds];
-    newRounds[roundIdx].matches[matchIdx].actualPlayers[originalId] = originalName;
-    setRounds(newRounds);
   };
 
   const exportTournament = () => {
@@ -614,6 +639,90 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Total Standings Modal */}
+      <AnimatePresence>
+        {showTotalStandings && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-[#141414]/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-[32px] w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-[#141414]/5 flex justify-between items-center bg-[#F5F5F0]">
+                <div>
+                  <h2 className="text-2xl font-serif italic leading-tight">Classifica Totale</h2>
+                  <p className="text-xs opacity-50 uppercase tracking-widest font-bold mt-1">Aggregata da Database</p>
+                </div>
+                <button 
+                  onClick={() => setShowTotalStandings(false)}
+                  className="p-2 hover:bg-white rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6">
+                {isTotalStandingsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-20 space-y-4">
+                    <RefreshCw size={40} className="animate-spin text-yellow-600" />
+                    <p className="text-sm font-bold opacity-40">Calcolo classifica totale in corso...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {totalStandingsData.map((entry, index) => (
+                      <motion.div
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                        key={entry.name}
+                        className="flex items-center gap-4 p-4 bg-[#F5F5F0] rounded-2xl border border-[#141414]/5"
+                      >
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-mono font-bold text-lg shadow-sm ${
+                          index === 0 ? 'bg-yellow-400 text-yellow-900' :
+                          index === 1 ? 'bg-slate-300 text-slate-700' :
+                          index === 2 ? 'bg-orange-300 text-orange-900' :
+                          'bg-white text-[#141414]/40'
+                        }`}>
+                          {index + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="block font-bold truncate">{entry.name}</span>
+                          <span className="text-[10px] opacity-40 uppercase font-bold tracking-tighter">
+                            {entry.matchesPlayed} Partite Giocate
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="block font-mono font-bold text-xl leading-none">{entry.totalPoints}</span>
+                          <span className="text-[10px] opacity-40 uppercase font-bold tracking-tighter">Punti Totali</span>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6 bg-[#F5F5F0] border-t border-[#141414]/5">
+                <p className="text-[10px] text-center opacity-40 font-medium leading-relaxed">
+                  * Include 2 punti bonus per ogni partita non giocata rispetto al massimo delle partite disputate nel torneo.
+                </p>
+                <button 
+                  onClick={() => setShowTotalStandings(false)}
+                  className="w-full mt-4 bg-[#141414] text-white rounded-2xl py-4 font-bold hover:bg-black transition-colors"
+                >
+                  Chiudi
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="bg-white border-b border-[#141414]/10 sticky top-0 z-30">
         <div className="max-w-4xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center justify-between w-full sm:w-auto gap-3">
@@ -642,7 +751,7 @@ export default function App() {
               onClick={() => setActiveTab('leaderboard')}
               className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'leaderboard' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
-              Classifica
+              Classifica Giornata
             </button>
             <button 
               onClick={() => setActiveTab('players')}
@@ -689,7 +798,7 @@ export default function App() {
                   </div>
                   <div>
                     <span className="block font-bold">Carica da Server</span>
-                    <span className="text-xs opacity-50">Importa Torneo da Database</span>
+                    <span className="text-xs opacity-50">Importa Giornata da Database</span>
                   </div>
                 </button>
 
@@ -702,7 +811,7 @@ export default function App() {
                   </div>
                   <div>
                     <span className="block font-bold">Salva su Server</span>
-                    <span className="text-xs opacity-50">Esporta su Database</span>
+                    <span className="text-xs opacity-50">Esporta Giornata su Database</span>
                   </div>
                 </button>
 
@@ -745,14 +854,30 @@ export default function App() {
 
                 <button 
                   onClick={copyLeaderboard}
+                  disabled={isCopying}
                   className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
                 >
                   <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
-                    {isCopying ? <Check size={24} className="text-green-600" /> : <Clipboard size={24} className="text-orange-600" />}
+                    {isCopying ? <Check size={24} className="text-emerald-500" /> : <Clipboard size={24} className="text-blue-600" />}
                   </div>
                   <div>
-                    <span className="block font-bold">{isCopying ? 'Copiato!' : 'Copia Classifica'}</span>
-                    <span className="text-xs opacity-50">Per Excel / Google Sheets</span>
+                    <span className="block font-bold">{isCopying ? 'Copiata!' : 'Copia Classifica Giornata'}</span>
+                    <span className="text-xs opacity-50">Copia i risultati negli appunti</span>
+                  </div>
+                </button>
+
+                <div className="h-px bg-[#141414]/5 my-2" />
+
+                <button 
+                  onClick={fetchTotalStandings}
+                  className="w-full flex items-center gap-4 p-4 bg-[#F5F5F0] hover:bg-[#E4E3E0] rounded-2xl transition-colors text-left"
+                >
+                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
+                    <Trophy size={24} className="text-yellow-600" />
+                  </div>
+                  <div>
+                    <span className="block font-bold">Visualizza Classifica Totale</span>
+                    <span className="text-xs opacity-50">Aggregata da tutte le giornate</span>
                   </div>
                 </button>
 
@@ -766,7 +891,7 @@ export default function App() {
                     </div>
                     <div>
                       <span className="block font-bold">Reset Totale</span>
-                      <span className="text-xs opacity-50 text-red-400">Resetta il Torneo Locale</span>
+                      <span className="text-xs opacity-50 text-red-400">Resetta la Giornata Locale</span>
                     </div>
                   </button>
                 </div>
@@ -1177,27 +1302,9 @@ export default function App() {
                                 <div className="space-y-1">
                                   {match.teamA.map(id => (
                                     <div key={id} className="flex justify-between items-center group">
-                                      <span className={`text-sm truncate pr-2 ${match.actualPlayers[id] !== starters.find(p => p.id === id)?.name ? 'text-orange-600 font-medium' : ''}`}>
-                                        {match.actualPlayers[id]}
+                                      <span className="text-sm truncate pr-2">
+                                        {starters.find(p => p.id === id)?.name}
                                       </span>
-                                      <div className="flex gap-1 flex-shrink-0">
-                                        <button 
-                                          onClick={() => setSwappingPlayer({ roundIdx: rIdx, matchIdx: mIdx, originalId: id })}
-                                          className="p-1.5 bg-white/80 hover:bg-white rounded-md shadow-sm border border-[#141414]/10 text-[#141414]/70 hover:text-[#141414] transition-all"
-                                          title="Sostituisci Giocatore"
-                                        >
-                                          <RefreshCw size={12} />
-                                        </button>
-                                        {match.actualPlayers[id] !== starters.find(p => p.id === id)?.name && (
-                                          <button 
-                                            onClick={() => resetPlayer(rIdx, mIdx, id)}
-                                            className="p-1.5 bg-red-50 hover:bg-red-100 rounded-md shadow-sm border border-red-100 text-red-500 transition-all"
-                                            title="Ripristina Titolare"
-                                          >
-                                            <Trash2 size={12} />
-                                          </button>
-                                        )}
-                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -1246,27 +1353,9 @@ export default function App() {
                                 <div className="space-y-1">
                                   {match.teamB.map(id => (
                                     <div key={id} className="flex justify-between items-center group">
-                                      <span className={`text-sm truncate pr-2 ${match.actualPlayers[id] !== starters.find(p => p.id === id)?.name ? 'text-orange-600 font-medium' : ''}`}>
-                                        {match.actualPlayers[id]}
+                                      <span className="text-sm truncate pr-2">
+                                        {starters.find(p => p.id === id)?.name}
                                       </span>
-                                      <div className="flex gap-1 flex-shrink-0">
-                                        <button 
-                                          onClick={() => setSwappingPlayer({ roundIdx: rIdx, matchIdx: mIdx, originalId: id })}
-                                          className="p-1.5 bg-white/80 hover:bg-white rounded-md shadow-sm border border-[#141414]/10 text-[#141414]/70 hover:text-[#141414] transition-all"
-                                          title="Sostituisci Giocatore"
-                                        >
-                                          <RefreshCw size={12} />
-                                        </button>
-                                        {match.actualPlayers[id] !== starters.find(p => p.id === id)?.name && (
-                                          <button 
-                                            onClick={() => resetPlayer(rIdx, mIdx, id)}
-                                            className="p-1.5 bg-red-50 hover:bg-red-100 rounded-md shadow-sm border border-red-100 text-red-500 transition-all"
-                                            title="Ripristina Titolare"
-                                          >
-                                            <Trash2 size={12} />
-                                          </button>
-                                        )}
-                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -1374,55 +1463,9 @@ export default function App() {
         )}
       </main>
 
-      <AnimatePresence>
-        {swappingPlayer && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#141414]/40 backdrop-blur-sm">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl border border-[#141414]/10"
-            >
-              <h3 className="text-lg font-serif italic mb-2">Sostituzione Giocatore</h3>
-              <p className="text-xs opacity-50 mb-4">Stai sostituendo {starters.find(p => p.id === swappingPlayer.originalId)?.name}</p>
-              
-              <div className="space-y-4 mb-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase font-bold opacity-40">Nome Sostituto</label>
-                  <input 
-                    autoFocus
-                    type="text" 
-                    placeholder="Es. Marco Rossi"
-                    value={newPlayerName}
-                    onChange={(e) => setNewPlayerName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSwapPlayer()}
-                    className="w-full bg-[#F5F5F0] border-none rounded-xl p-4 text-lg focus:ring-2 focus:ring-[#141414]"
-                  />
-                </div>
-              </div>
-
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => { setSwappingPlayer(null); setNewPlayerName(''); }}
-                  className="flex-1 bg-[#E4E3E0] rounded-xl py-3 font-bold hover:bg-[#D4D3D0] transition-colors"
-                >
-                  Annulla
-                </button>
-                <button 
-                  onClick={handleSwapPlayer}
-                  className="flex-1 bg-[#141414] text-white rounded-xl py-3 font-bold hover:bg-black transition-colors"
-                >
-                  Conferma
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       <footer className="max-w-4xl mx-auto px-4 py-8 border-t border-[#141414]/10 text-center">
         <p className="text-[10px] uppercase tracking-widest font-bold opacity-30">
-          Regole: Sostituto prende i punti del match • Titolare assente riceve 2 punti bonus
+          Ogni giornata locale equivale a una giornata di gioco • 12 giocatori fissi
         </p>
       </footer>
     </div>

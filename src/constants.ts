@@ -18,7 +18,6 @@ const generateRounds = (): Round[] => {
         teamB: [f(2, k), f(3, k)],
         scoreA: 0,
         scoreB: 0,
-        actualPlayers: {}
       },
       {
         id: `${k + 1}-2`,
@@ -27,7 +26,6 @@ const generateRounds = (): Round[] => {
         teamB: [f(5, k), f(9, k)],
         scoreA: 0,
         scoreB: 0,
-        actualPlayers: {}
       },
       {
         id: `${k + 1}-3`,
@@ -36,16 +34,8 @@ const generateRounds = (): Round[] => {
         teamB: [f(8, k), f(11, k)],
         scoreA: 0,
         scoreB: 0,
-        actualPlayers: {}
       }
     ];
-
-    // Initialize actualPlayers with default starter names
-    roundMatches.forEach(match => {
-      [...match.teamA, ...match.teamB].forEach(id => {
-        match.actualPlayers[id] = `Giocatore ${id}`;
-      });
-    });
 
     rounds.push({
       number: k + 1,
