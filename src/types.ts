@@ -25,7 +25,24 @@ export interface Round {
 
 export interface LeaderboardEntry {
   name: string;
-  role: PlayerRole;
   totalPoints: number;
   matchesPlayed: number;
+  wins?: number;
+  losses?: number;
+  avgPoints?: number;
+  bestPartner?: string;
+  nemesis?: string;
+  trend?: ('W' | 'L')[];
+  pointDiff?: number;
+  lastDayWinRate?: number;
+  maxTournamentMatches?: number;
+  normPoints?: number;
+  normDiff?: number;
+  pointsConceded?: number;
+  totalPointsMade?: number;
+  daysPlayed?: number;
+  isBomber?: boolean;
+  isMuro?: boolean;
+  isVeterano?: boolean;
+  isInvincibile?: boolean;
 }
