@@ -3,11 +3,12 @@ import { Trophy, Users, Calendar, RefreshCw, ChevronRight, ChevronDown, UserPlus
 import { motion, AnimatePresence } from 'motion/react';
 import LZString from 'lz-string';
 import { Player, Round, PlayerRole, LeaderboardEntry, Match } from './types';
-import { INITIAL_ROUNDS, INITIAL_PLAYERS } from './constants';
+import { generateRounds, generatePlayers } from './constants';
 
 const STORAGE_KEY_ROUNDS = 'padel_tournament_rounds';
 const STORAGE_KEY_STARTERS = 'padel_tournament_starters';
 const STORAGE_KEY_UNLOCKED = 'padel_tournament_unlocked';
+const STORAGE_KEY_COURTS = 'padel_tournament_courts';
 
 const GOOGLE_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSfTkxLau-pYc3bCS0LgCiW_M1aogrw4Ypv6czOPRcbthZMuTA/formResponse';
 const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQG2pYTsjkUEtTb4dyGaBHRQ-5mSSXo3glLQfqbejebXVpmT3oDubXovDExoLMMKk9gDlyArTUK2DO-/pub?gid=327084063&single=true&output=csv';
@@ -98,13 +99,27 @@ const RadarChart = ({ stats }: { stats: { label: string, value: number, max: num
 };
 
 export default function App() {
+  const [numCourts, setNumCourts] = useState<number>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_COURTS);
+    return saved ? parseInt(saved) : 3;
+  });
+  const [pendingNumCourts, setPendingNumCourts] = useState<number>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_COURTS);
+    return saved ? parseInt(saved) : 3;
+  });
+  const [showCourtConfirmModal, setShowCourtConfirmModal] = useState(false);
+
   const [rounds, setRounds] = useState<Round[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_ROUNDS);
-    return saved ? JSON.parse(saved) : INITIAL_ROUNDS;
+    if (saved) return JSON.parse(saved);
+    const savedCourts = localStorage.getItem(STORAGE_KEY_COURTS);
+    return generateRounds(savedCourts ? parseInt(savedCourts) : 3);
   });
   const [starters, setStarters] = useState<Player[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_STARTERS);
-    return saved ? JSON.parse(saved) : INITIAL_PLAYERS;
+    if (saved) return JSON.parse(saved);
+    const savedCourts = localStorage.getItem(STORAGE_KEY_COURTS);
+    return generatePlayers(savedCourts ? parseInt(savedCourts) : 3);
   });
   const [activeTab, setActiveTab] = useState<'live' | 'leaderboard' | 'total' | 'players'>('live');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -123,17 +138,19 @@ export default function App() {
   }, [toast]);
 
   const [expandedRound, setExpandedRound] = useState<number | null>(1);
-  const [unlockedMatches, setUnlockedMatches] = useState<Set<string>>(() => {
+  const [modifiedMatches, setModifiedMatches] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_UNLOCKED);
     return saved ? new Set(JSON.parse(saved)) : new Set();
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
-  const [incomingTournament, setIncomingTournament] = useState<{ rounds: Round[], starters: Player[], unlockedMatches?: string[] } | null>(null);
+  const [incomingTournament, setIncomingTournament] = useState<{ rounds: Round[], starters: Player[], modifiedMatches?: string[] } | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportFileName, setExportFileName] = useState('torneo_padel.json');
   const [showResetModal, setShowResetModal] = useState(false);
+  const [showImportPlayersModal, setShowImportPlayersModal] = useState(false);
+  const [selectedImportPlayers, setSelectedImportPlayers] = useState<string[]>([]);
   const [serverModal, setServerModal] = useState<{
     type: 'save' | 'load';
     step: 'password' | 'id' | 'confirm' | 'list';
@@ -299,7 +316,8 @@ export default function App() {
       
       Object.values(scores).forEach(data => {
         if (data.points > maxPointsMade) maxPointsMade = data.points;
-        if (data.matches >= 4 && data.pointsConceded < minConceded) minConceded = data.pointsConceded;
+        // Require at least 50% of max matches to be eligible for Muro badge in total standings
+        if (data.matches >= Math.max(3, Math.floor(maxMatches * 0.5)) && data.pointsConceded < minConceded) minConceded = data.pointsConceded;
       });
 
       // Apply bonus points: 2 per missing match compared to maxMatches
@@ -353,7 +371,7 @@ export default function App() {
           daysPlayed: data.daysPlayed,
           // Badge logic
           isBomber: data.points === maxPointsMade && data.points > 0,
-          isMuro: data.pointsConceded === minConceded && data.matches >= 4,
+          isMuro: data.pointsConceded === minConceded && data.matches >= Math.max(3, Math.floor(maxMatches * 0.5)),
           isVeterano: data.matches === maxMatches && data.daysPlayed >= 2,
           isOrganizzatore: name.toLowerCase() === 'zukka' || name.toLowerCase() === 'zucca',
           isInvincibile: (data.wins / (data.matches || 1)) > 0.7 && data.matches >= 3,
@@ -373,7 +391,7 @@ export default function App() {
   };
 
   // Minification logic for sharing
-  const minifyTournament = (data: { rounds: Round[], starters: Player[], unlockedMatches: string[] }) => {
+  const minifyTournament = (data: { rounds: Round[], starters: Player[], modifiedMatches: string[] }) => {
     return {
       r: data.rounds.map(round => ({
         n: round.number,
@@ -391,7 +409,7 @@ export default function App() {
         i: p.id,
         n: p.name
       })),
-      u: data.unlockedMatches
+      u: data.modifiedMatches
     };
   };
 
@@ -423,7 +441,7 @@ export default function App() {
     return {
       rounds,
       starters,
-      unlockedMatches: min.u || []
+      modifiedMatches: min.u || []
     };
   };
 
@@ -471,21 +489,23 @@ export default function App() {
 
   const handleConfirmImport = () => {
     if (incomingTournament) {
-      const { rounds: newRounds, starters: newStarters, unlockedMatches: newUnlocked } = incomingTournament;
+      const { rounds: newRounds, starters: newStarters } = incomingTournament;
+      
+      const inferredCourts = Math.floor(newStarters.length / 4);
+      setNumCourts(inferredCourts);
+      setPendingNumCourts(inferredCourts);
+      localStorage.setItem(STORAGE_KEY_COURTS, inferredCourts.toString());
       
       // Update state
       setRounds(newRounds);
       setStarters(newStarters);
-      if (newUnlocked) {
-        setUnlockedMatches(new Set(newUnlocked));
-      }
+      const restoredModified = new Set(incomingTournament.modifiedMatches || []);
+      setModifiedMatches(restoredModified);
 
       // Force immediate localStorage update
       localStorage.setItem(STORAGE_KEY_ROUNDS, JSON.stringify(newRounds));
       localStorage.setItem(STORAGE_KEY_STARTERS, JSON.stringify(newStarters));
-      if (newUnlocked) {
-        localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(newUnlocked));
-      }
+      localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(Array.from(restoredModified)));
     }
     setShowImportModal(false);
     setIncomingTournament(null);
@@ -508,16 +528,47 @@ export default function App() {
   }, [starters]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(Array.from(unlockedMatches)));
-  }, [unlockedMatches]);
+    localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(Array.from(modifiedMatches)));
+  }, [modifiedMatches]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_COURTS, numCourts.toString());
+  }, [numCourts]);
+
+  const applyNumCourtsChange = () => {
+    const newNum = pendingNumCourts;
+    if (newNum < 1 || newNum > 10) return;
+    setNumCourts(newNum);
+    
+    const newCount = newNum * 4;
+    let newStarters = [...starters];
+    
+    if (newCount > starters.length) {
+      const extra = Array.from({ length: newCount - starters.length }, (_, i) => ({
+        id: starters.length + i + 1,
+        name: `Giocatore ${starters.length + i + 1}`,
+        role: PlayerRole.TITOLARE,
+      }));
+      newStarters = [...newStarters, ...extra];
+    } else if (newCount < starters.length) {
+      newStarters = newStarters.slice(0, newCount);
+    }
+    
+    setStarters(newStarters);
+    setRounds(generateRounds(newNum));
+    setModifiedMatches(new Set());
+    setShowCourtConfirmModal(false);
+    setToast({ message: `Configurazione aggiornata: ${newNum} campi (${newCount} giocatori)`, type: 'success' });
+  };
 
   const resetTournament = () => {
     localStorage.removeItem(STORAGE_KEY_ROUNDS);
     localStorage.removeItem(STORAGE_KEY_STARTERS);
     localStorage.removeItem(STORAGE_KEY_UNLOCKED);
-    setRounds(INITIAL_ROUNDS);
-    setStarters(INITIAL_PLAYERS);
-    setUnlockedMatches(new Set());
+    setRounds(generateRounds(numCourts));
+    setStarters(generatePlayers(numCourts));
+    setModifiedMatches(new Set());
+    setPendingNumCourts(numCourts);
     setExpandedRound(1);
     setActiveTab('live');
     setShowResetModal(false);
@@ -548,10 +599,10 @@ export default function App() {
       };
     });
 
-    rounds.filter(r => r.completed).forEach(round => {
+    rounds.forEach(round => {
       const playersInThisRound = new Set<string>();
       
-      round.matches.forEach(match => {
+      round.matches.filter(m => modifiedMatches.has(m.id)).forEach(match => {
         const { scoreA, scoreB, teamA, teamB } = match;
         
         const teamANames = teamA.map(id => starters.find(p => p.id === id)?.name || '');
@@ -597,12 +648,14 @@ export default function App() {
         teamBNames.forEach(name => processMatchPlayer(name, scoreB, scoreA, teamBNames, teamANames, scoreB > scoreA));
       });
 
-      // Award 2 points to starters who did NOT play in this round
-      starters.forEach(p => {
-        if (!playersInThisRound.has(p.name)) {
-          scores[p.name].points += 2;
-        }
-      });
+      // Award 2 points to starters who did NOT play in this round (only if round is completed)
+      if (round.completed) {
+        starters.forEach(p => {
+          if (!playersInThisRound.has(p.name)) {
+            scores[p.name].points += 2;
+          }
+        });
+      }
     });
 
     // Identify global max points and min conceded for badges in this day
@@ -612,7 +665,7 @@ export default function App() {
     
     Object.values(scores).forEach(data => {
       if (data.points > maxPointsMade) maxPointsMade = data.points;
-      if (data.matches >= 3 && data.pointsConceded < minConceded) minConceded = data.pointsConceded;
+      if (data.matches >= Math.max(2, Math.floor(maxMatches * 0.7)) && data.pointsConceded < minConceded) minConceded = data.pointsConceded;
       if (data.matches > maxMatches) maxMatches = data.matches;
     });
 
@@ -656,7 +709,7 @@ export default function App() {
           nemesis,
           trend: data.trend.slice(-5),
           isBomber: data.points === maxPointsMade && data.points > 0,
-          isMuro: data.pointsConceded === minConceded && data.matches >= 3,
+          isMuro: data.pointsConceded === minConceded && data.matches >= Math.max(2, Math.floor(maxMatches * 0.7)),
           isVeterano: data.matches === maxMatches && data.matches > 0,
           isOrganizzatore: name.toLowerCase() === 'zukka' || name.toLowerCase() === 'zucca'
         };
@@ -672,14 +725,18 @@ export default function App() {
     setRounds(newRounds);
   };
 
-  const toggleMatchLock = (matchId: string) => {
-    const newUnlocked = new Set(unlockedMatches);
-    if (newUnlocked.has(matchId)) {
-      newUnlocked.delete(matchId);
-    } else {
-      newUnlocked.add(matchId);
-    }
-    setUnlockedMatches(newUnlocked);
+  const confirmMatchScore = (matchId: string) => {
+    const newModified = new Set(modifiedMatches);
+    newModified.add(matchId);
+    setModifiedMatches(newModified);
+    setToast({ message: 'Match confermato!', type: 'success' });
+  };
+
+  const unconfirmMatchScore = (matchId: string) => {
+    const newModified = new Set(modifiedMatches);
+    newModified.delete(matchId);
+    setModifiedMatches(newModified);
+    setToast({ message: 'Match riaperto per modifiche', type: 'info' });
   };
 
   const toggleRoundCompletion = (roundIdx: number) => {
@@ -701,7 +758,7 @@ export default function App() {
     const data = {
       rounds,
       starters,
-      unlockedMatches: Array.from(unlockedMatches)
+      modifiedMatches: Array.from(modifiedMatches)
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -829,7 +886,7 @@ export default function App() {
     const data = {
       rounds,
       starters,
-      unlockedMatches: Array.from(unlockedMatches) as string[]
+      modifiedMatches: Array.from(modifiedMatches) as string[]
     };
     const minified = minifyTournament(data);
     const compressed = LZString.compressToEncodedURIComponent(JSON.stringify(minified));
@@ -905,15 +962,12 @@ export default function App() {
       const data = serverModal.foundData;
       setRounds(data.rounds);
       setStarters(data.starters);
-      if (data.unlockedMatches) {
-        setUnlockedMatches(new Set(data.unlockedMatches));
-      }
+      const restoredModified = new Set(data.modifiedMatches || []);
+      setModifiedMatches(restoredModified);
       
       localStorage.setItem(STORAGE_KEY_ROUNDS, JSON.stringify(data.rounds));
       localStorage.setItem(STORAGE_KEY_STARTERS, JSON.stringify(data.starters));
-      if (data.unlockedMatches) {
-        localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(data.unlockedMatches));
-      }
+      localStorage.setItem(STORAGE_KEY_UNLOCKED, JSON.stringify(Array.from(restoredModified)));
 
       setServerModal(null);
       setServerTournamentId('');
@@ -960,12 +1014,18 @@ export default function App() {
               </button>
               <div>
                 <h1 className="text-xl font-serif italic font-bold tracking-tight leading-none">Padel Americano</h1>
-                <p className="text-[10px] uppercase tracking-widest opacity-50 font-semibold">12 Players • 11 Rounds</p>
+                <p className="text-[10px] uppercase tracking-widest opacity-50 font-semibold">{numCourts * 4} Giocatori • {numCourts * 4 - 1} Turni</p>
               </div>
             </div>
           </div>
           
           <div className="grid grid-cols-4 sm:flex w-full sm:w-auto bg-[#E4E3E0] p-1 rounded-xl sm:rounded-full gap-1">
+            <button 
+              onClick={() => setActiveTab('players')}
+              className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'players' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
+            >
+              Giocatori
+            </button>
             <button 
               onClick={() => setActiveTab('live')}
               className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'live' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
@@ -983,12 +1043,6 @@ export default function App() {
               className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'total' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
             >
               Totale
-            </button>
-            <button 
-              onClick={() => setActiveTab('players')}
-              className={`px-2 sm:px-4 py-2 rounded-lg sm:rounded-full text-[11px] sm:text-xs font-medium transition-all ${activeTab === 'players' ? 'bg-white shadow-sm' : 'opacity-50 hover:opacity-100'}`}
-            >
-              Giocatori
             </button>
           </div>
         </div>
@@ -1433,6 +1487,134 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Modal Importazione Giocatori */}
+      <AnimatePresence>
+        {showImportPlayersModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl flex flex-col"
+            >
+              <div className="p-6 bg-[#141414] text-white flex justify-between items-center">
+                <div>
+                  <h3 className="text-xl font-serif italic">Importa Giocatori</h3>
+                  <p className="text-xs opacity-50">Seleziona fino a {numCourts * 4} giocatori dalla classifica generale</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setShowImportPlayersModal(false);
+                    setSelectedImportPlayers([]);
+                  }}
+                  className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6">
+                {isTotalStandingsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-4">
+                    <RefreshCw size={32} className="animate-spin text-blue-600" />
+                    <p className="text-sm font-medium opacity-50">Caricamento classifica generale...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-xs font-bold uppercase opacity-40">Giocatore</span>
+                      <div className="flex items-center gap-4">
+                        <span className="text-xs font-bold uppercase opacity-40">Presenze</span>
+                        <button 
+                          onClick={fetchTotalStandings}
+                          className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-blue-600"
+                          title="Aggiorna dati"
+                        >
+                          <RefreshCw size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    {[...totalStandingsData]
+                      .sort((a, b) => (b.daysPlayed || 0) - (a.daysPlayed || 0))
+                      .map((player) => {
+                        const isSelected = selectedImportPlayers.includes(player.name);
+                        const isDisabled = !isSelected && selectedImportPlayers.length >= numCourts * 4;
+                        
+                        return (
+                          <button
+                            key={player.name}
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedImportPlayers(prev => prev.filter(n => n !== player.name));
+                              } else if (!isDisabled) {
+                                setSelectedImportPlayers(prev => [...prev, player.name]);
+                              }
+                            }}
+                            disabled={isDisabled}
+                            className={`w-full flex items-center justify-between p-3 rounded-xl border transition-all ${
+                              isSelected 
+                                ? 'bg-blue-50 border-blue-200 shadow-sm' 
+                                : isDisabled 
+                                  ? 'opacity-30 grayscale cursor-not-allowed border-transparent' 
+                                  : 'bg-[#F5F5F0] border-[#141414]/5 hover:border-[#141414]/20'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={`w-5 h-5 rounded flex items-center justify-center border ${
+                                isSelected ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300'
+                              }`}>
+                                {isSelected && <Check size={14} strokeWidth={3} />}
+                              </div>
+                              <span className="font-bold">{player.name}</span>
+                            </div>
+                            <span className="font-mono text-sm opacity-50">{player.daysPlayed} gg</span>
+                          </button>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6 border-t border-[#141414]/10 bg-[#F5F5F0] flex items-center justify-between">
+                <div className="text-sm">
+                  <span className="font-bold text-blue-600">{selectedImportPlayers.length}</span>
+                  <span className="opacity-50"> / {numCourts * 4} selezionati</span>
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => {
+                      setShowImportPlayersModal(false);
+                      setSelectedImportPlayers([]);
+                    }}
+                    className="px-6 py-2 rounded-xl font-bold hover:bg-gray-200 transition-all"
+                  >
+                    Annulla
+                  </button>
+                  <button 
+                    onClick={() => {
+                      const newStarters = [...starters];
+                      selectedImportPlayers.forEach((name, index) => {
+                        if (index < newStarters.length) {
+                          newStarters[index] = { ...newStarters[index], name };
+                        }
+                      });
+                      setStarters(newStarters);
+                      setShowImportPlayersModal(false);
+                      setSelectedImportPlayers([]);
+                      setToast({ message: `${selectedImportPlayers.length} giocatori importati!`, type: 'success' });
+                    }}
+                    disabled={selectedImportPlayers.length === 0}
+                    className="px-8 py-2 bg-[#141414] text-white rounded-xl font-bold hover:bg-black transition-all shadow-lg disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Conferma Importazione
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Reset Confirmation Modal */}
       <AnimatePresence>
         {showResetModal && (
@@ -1467,6 +1649,51 @@ export default function App() {
                 </button>
                 <button 
                   onClick={() => setShowResetModal(false)}
+                  className="w-full bg-[#F5F5F0] text-[#141414] rounded-2xl py-4 font-bold hover:bg-[#E4E3E0] transition-colors"
+                >
+                  Annulla
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {showCourtConfirmModal && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-[#141414]/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl"
+            >
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
+                  <Target size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-serif italic">Cambia Campi</h3>
+                  <p className="text-xs opacity-50">Questa azione resetterà il torneo</p>
+                </div>
+              </div>
+
+              <p className="text-sm opacity-70 mb-8 leading-relaxed">
+                Stai cambiando la configurazione a <strong>{pendingNumCourts} campi</strong> ({pendingNumCourts * 4} giocatori). 
+                Tutti i match correnti e i punteggi verranno resettati. Vuoi procedere?
+              </p>
+
+              <div className="space-y-3">
+                <button 
+                  onClick={applyNumCourtsChange}
+                  className="w-full bg-blue-600 text-white rounded-2xl py-4 font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Check size={20} />
+                  Sì, Applica e Resetta
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowCourtConfirmModal(false);
+                    setPendingNumCourts(numCourts);
+                  }}
                   className="w-full bg-[#F5F5F0] text-[#141414] rounded-2xl py-4 font-bold hover:bg-[#E4E3E0] transition-colors"
                 >
                   Annulla
@@ -1709,6 +1936,116 @@ export default function App() {
       </AnimatePresence>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
+        {activeTab === 'players' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl border border-[#141414]/5 overflow-hidden shadow-sm">
+              <div className="p-6 border-b border-[#141414]/10 flex justify-between items-center bg-[#141414] text-white">
+                <h2 className="text-xl font-serif italic">Configurazione Campi</h2>
+                <Target size={20} />
+              </div>
+              <div className="p-6">
+                <div className="flex flex-col sm:flex-row items-center justify-between bg-[#F5F5F0] p-4 rounded-2xl border border-[#141414]/5 gap-4">
+                  <div className="flex-1">
+                    <span className="block font-bold text-lg">{pendingNumCourts} Campi</span>
+                    <span className="text-xs opacity-50">{pendingNumCourts * 4} Giocatori • {pendingNumCourts * 4 - 1} Turni</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setPendingNumCourts(prev => Math.max(1, prev - 1))}
+                        disabled={pendingNumCourts <= 1}
+                        className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                      >
+                        <Minus size={20} />
+                      </button>
+                      <button 
+                        onClick={() => setPendingNumCourts(prev => Math.min(10, prev + 1))}
+                        disabled={pendingNumCourts >= 10}
+                        className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+                      >
+                        <Plus size={20} />
+                      </button>
+                    </div>
+                    {pendingNumCourts !== numCourts && (
+                      <button 
+                        onClick={() => setShowCourtConfirmModal(true)}
+                        className="px-6 py-2 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md flex items-center gap-2"
+                      >
+                        <Check size={18} />
+                        Applica
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {pendingNumCourts !== numCourts && (
+                  <p className="mt-4 text-[10px] text-red-500 font-bold uppercase tracking-wider">
+                    ⚠️ Attenzione: Cambiare il numero di campi resetterà i turni correnti!
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-[#141414]/5 overflow-hidden shadow-sm">
+              <div className="p-6 border-b border-[#141414]/10 flex justify-between items-center bg-[#141414] text-white">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-xl font-serif italic">Gestione Giocatori</h2>
+                  <button 
+                    onClick={() => {
+                      fetchTotalStandings();
+                      setShowImportPlayersModal(true);
+                    }}
+                    className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-colors border border-white/10"
+                  >
+                    <CloudDownload size={14} />
+                    Importa da Classifica
+                  </button>
+                </div>
+                <Users size={20} />
+              </div>
+              <div className="p-6 grid gap-4 md:grid-cols-2">
+                {starters.map((player) => (
+                  <div key={player.id} className="flex items-center gap-4 bg-[#F5F5F0] p-3 rounded-xl border border-[#141414]/5">
+                    <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center font-mono font-bold text-sm shadow-sm">
+                      {player.id}
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">ID {player.id}</label>
+                      <input 
+                        type="text"
+                        value={player.name}
+                        onChange={(e) => handleStarterNameChange(player.id, e.target.value)}
+                        className="w-full bg-transparent border-b border-[#141414]/10 focus:border-[#141414] focus:outline-none py-1 font-medium transition-colors"
+                        placeholder={`Nome Giocatore ${player.id}`}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-6 bg-[#F5F5F0] border-t border-[#141414]/10">
+                <p className="text-xs opacity-50 italic">
+                  * Modificando i nomi qui, verranno aggiornati automaticamente in tutti i turni dove il giocatore è presente come titolare.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-red-100 overflow-hidden shadow-sm">
+              <div className="p-6 flex justify-between items-center">
+                <div>
+                  <h3 className="font-serif italic text-lg">Zona Pericolosa</h3>
+                  <p className="text-xs opacity-50">Resetta tutti i dati del torneo</p>
+                </div>
+                <button 
+                  onClick={() => setShowResetModal(true)}
+                  className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl font-bold hover:bg-red-100 transition-colors"
+                >
+                  <Trash2 size={18} />
+                  Reset Torneo
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'live' && (
           <div className="space-y-4">
             {rounds.map((round, rIdx) => (
@@ -1756,18 +2093,34 @@ export default function App() {
                     >
                       <div className="p-4 grid gap-4 md:grid-cols-3">
                         {round.matches.map((match, mIdx) => {
-                          const isUnlocked = unlockedMatches.has(match.id);
+                          const isConfirmed = modifiedMatches.has(match.id);
                           return (
-                            <div key={match.id} className="bg-[#F5F5F0] p-4 rounded-xl space-y-4 border border-[#141414]/5 relative">
+                            <div key={match.id} className={`p-4 rounded-xl space-y-4 border transition-all relative ${isConfirmed ? 'bg-green-50/50 border-green-200' : 'bg-[#F5F5F0] border-[#141414]/5'}`}>
                               <div className="flex justify-between items-center border-b border-[#141414]/10 pb-2">
                                 <span className="text-[10px] uppercase tracking-widest font-bold opacity-40">Campo {match.court}</span>
-                                <button 
-                                  onClick={() => toggleMatchLock(match.id)}
-                                  className={`p-1.5 rounded-full transition-colors ${isUnlocked ? 'bg-green-100 text-green-600' : 'bg-gray-200 text-gray-500'}`}
-                                  title={isUnlocked ? "Conferma e Blocca" : "Sblocca per Modificare"}
-                                >
-                                  {isUnlocked ? <Unlock size={12} /> : <Lock size={12} />}
-                                </button>
+                                {isConfirmed ? (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[9px] font-black uppercase text-green-600 flex items-center gap-1">
+                                      <Check size={10} strokeWidth={3} />
+                                      Concluso
+                                    </span>
+                                    <button 
+                                      onClick={() => unconfirmMatchScore(match.id)}
+                                      className="p-1 hover:bg-green-100 rounded-md text-green-700 transition-colors"
+                                      title="Modifica punteggio"
+                                    >
+                                      <Edit2 size={12} />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button 
+                                    onClick={() => confirmMatchScore(match.id)}
+                                    className="flex items-center gap-1 bg-blue-600 text-white px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider hover:bg-blue-700 transition-all shadow-sm"
+                                  >
+                                    <Check size={10} />
+                                    Conferma
+                                  </button>
+                                )}
                               </div>
 
                               {/* Team A */}
@@ -1775,29 +2128,31 @@ export default function App() {
                                 <div className="space-y-1">
                                   {match.teamA.map(id => (
                                     <div key={id} className="flex justify-between items-center group">
-                                      <span className="text-sm truncate pr-2">
+                                      <span className={`text-sm truncate pr-2 font-medium ${isConfirmed ? 'opacity-60' : ''}`}>
                                         {starters.find(p => p.id === id)?.name}
                                       </span>
                                     </div>
                                   ))}
                                 </div>
                                 
-                                <div className="flex items-center justify-center gap-3 bg-white rounded-lg border border-[#141414]/5 p-1 shadow-sm">
-                                  <button 
-                                    disabled={!isUnlocked}
-                                    onClick={() => updateScore(rIdx, mIdx, 'A', -1)}
-                                    className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors ${isUnlocked ? 'hover:bg-[#F5F5F0]' : 'opacity-20 cursor-not-allowed'}`}
-                                  >
-                                    <Minus size={14} />
-                                  </button>
-                                  <span className={`font-mono text-xl font-bold w-8 text-center ${!isUnlocked ? 'opacity-60' : ''}`}>{match.scoreA}</span>
-                                  <button 
-                                    disabled={!isUnlocked}
-                                    onClick={() => updateScore(rIdx, mIdx, 'A', 1)}
-                                    className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors ${isUnlocked ? 'hover:bg-[#F5F5F0]' : 'opacity-20 cursor-not-allowed'}`}
-                                  >
-                                    <Plus size={14} />
-                                  </button>
+                                <div className={`flex items-center justify-center gap-3 bg-white rounded-lg border border-[#141414]/5 p-1 shadow-sm ${isConfirmed ? 'opacity-60' : ''}`}>
+                                  {!isConfirmed && (
+                                    <button 
+                                      onClick={() => updateScore(rIdx, mIdx, 'A', -1)}
+                                      className="w-8 h-8 flex items-center justify-center rounded-md transition-colors hover:bg-[#F5F5F0]"
+                                    >
+                                      <Minus size={14} />
+                                    </button>
+                                  )}
+                                  <span className="font-mono text-xl font-bold w-8 text-center">{match.scoreA}</span>
+                                  {!isConfirmed && (
+                                    <button 
+                                      onClick={() => updateScore(rIdx, mIdx, 'A', 1)}
+                                      className="w-8 h-8 flex items-center justify-center rounded-md transition-colors hover:bg-[#F5F5F0]"
+                                    >
+                                      <Plus size={14} />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
 
@@ -1805,28 +2160,30 @@ export default function App() {
 
                               {/* Team B */}
                               <div className="space-y-3">
-                                <div className="flex items-center justify-center gap-3 bg-white rounded-lg border border-[#141414]/5 p-1 shadow-sm">
-                                  <button 
-                                    disabled={!isUnlocked}
-                                    onClick={() => updateScore(rIdx, mIdx, 'B', -1)}
-                                    className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors ${isUnlocked ? 'hover:bg-[#F5F5F0]' : 'opacity-20 cursor-not-allowed'}`}
-                                  >
-                                    <Minus size={14} />
-                                  </button>
-                                  <span className={`font-mono text-xl font-bold w-8 text-center ${!isUnlocked ? 'opacity-60' : ''}`}>{match.scoreB}</span>
-                                  <button 
-                                    disabled={!isUnlocked}
-                                    onClick={() => updateScore(rIdx, mIdx, 'B', 1)}
-                                    className={`w-8 h-8 flex items-center justify-center rounded-md transition-colors ${isUnlocked ? 'hover:bg-[#F5F5F0]' : 'opacity-20 cursor-not-allowed'}`}
-                                  >
-                                    <Plus size={14} />
-                                  </button>
+                                <div className={`flex items-center justify-center gap-3 bg-white rounded-lg border border-[#141414]/5 p-1 shadow-sm ${isConfirmed ? 'opacity-60' : ''}`}>
+                                  {!isConfirmed && (
+                                    <button 
+                                      onClick={() => updateScore(rIdx, mIdx, 'B', -1)}
+                                      className="w-8 h-8 flex items-center justify-center rounded-md transition-colors hover:bg-[#F5F5F0]"
+                                    >
+                                      <Minus size={14} />
+                                    </button>
+                                  )}
+                                  <span className="font-mono text-xl font-bold w-8 text-center">{match.scoreB}</span>
+                                  {!isConfirmed && (
+                                    <button 
+                                      onClick={() => updateScore(rIdx, mIdx, 'B', 1)}
+                                      className="w-8 h-8 flex items-center justify-center rounded-md transition-colors hover:bg-[#F5F5F0]"
+                                    >
+                                      <Plus size={14} />
+                                    </button>
+                                  )}
                                 </div>
 
                                 <div className="space-y-1">
                                   {match.teamB.map(id => (
                                     <div key={id} className="flex justify-between items-center group">
-                                      <span className="text-sm truncate pr-2">
+                                      <span className={`text-sm truncate pr-2 font-medium ${isConfirmed ? 'opacity-60' : ''}`}>
                                         {starters.find(p => p.id === id)?.name}
                                       </span>
                                     </div>
@@ -1901,6 +2258,9 @@ export default function App() {
             <div className="p-6 border-b border-[#141414]/10 flex justify-between items-center bg-[#141414] text-white">
               <div>
                 <h2 className="text-xl font-serif italic leading-tight">Classifica Totale</h2>
+                <p className="text-[10px] uppercase tracking-widest opacity-50 font-semibold mt-1">
+                  {totalStandingsData.length} Giocatori Unici • {totalStandingsData.length > 0 ? totalStandingsData[0].maxTournamentMatches : 0} Match Max
+                </p>
               </div>
               <Trophy size={20} className="text-yellow-400" />
             </div>
@@ -1967,62 +2327,11 @@ export default function App() {
             </div>
           </div>
         )}
-
-        {activeTab === 'players' && (
-          <div className="space-y-6">
-            <div className="bg-white rounded-2xl border border-[#141414]/5 overflow-hidden shadow-sm">
-              <div className="p-6 border-b border-[#141414]/10 flex justify-between items-center bg-[#141414] text-white">
-                <h2 className="text-xl font-serif italic">Gestione Giocatori</h2>
-                <Users size={20} />
-              </div>
-              <div className="p-6 grid gap-4 md:grid-cols-2">
-                {starters.map((player) => (
-                  <div key={player.id} className="flex items-center gap-4 bg-[#F5F5F0] p-3 rounded-xl border border-[#141414]/5">
-                    <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center font-mono font-bold text-sm shadow-sm">
-                      {player.id}
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-[10px] uppercase font-bold opacity-40 block mb-1">ID {player.id}</label>
-                      <input 
-                        type="text"
-                        value={player.name}
-                        onChange={(e) => handleStarterNameChange(player.id, e.target.value)}
-                        className="w-full bg-transparent border-b border-[#141414]/10 focus:border-[#141414] focus:outline-none py-1 font-medium transition-colors"
-                        placeholder={`Nome Giocatore ${player.id}`}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="p-6 bg-[#F5F5F0] border-t border-[#141414]/10">
-                <p className="text-xs opacity-50 italic">
-                  * Modificando i nomi qui, verranno aggiornati automaticamente in tutti i turni dove il giocatore è presente come titolare.
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-red-100 overflow-hidden shadow-sm">
-              <div className="p-6 flex justify-between items-center">
-                <div>
-                  <h3 className="font-serif italic text-lg">Zona Pericolosa</h3>
-                  <p className="text-xs opacity-50">Resetta tutti i dati del torneo</p>
-                </div>
-                <button 
-                  onClick={() => setShowResetModal(true)}
-                  className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-xl font-bold hover:bg-red-100 transition-colors"
-                >
-                  <Trash2 size={18} />
-                  Reset Torneo
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </main>
 
       <footer className="max-w-4xl mx-auto px-4 py-8 border-t border-[#141414]/10 text-center">
         <p className="text-[10px] uppercase tracking-widest font-bold opacity-30">
-          Ogni giornata locale equivale a una giornata di gioco • 12 giocatori fissi
+          Ogni giornata locale equivale a una giornata di gioco • {numCourts * 4} giocatori fissi
         </p>
       </footer>
     </div>
